@@ -1,6 +1,6 @@
 
 expr: expr.adb Makefile
-	gnatmake -g -O0 -gnata expr.adb
+	gnatmake -g -O0 -gnata -gnat12 expr.adb
 
 test: expr code.txt support.o Makefile
 	./expr < code.txt > a.s

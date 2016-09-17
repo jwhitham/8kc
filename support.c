@@ -12,3 +12,11 @@ void quit (void)
 	exit (0);
 }
 
+void my_main (void);
+
+int main (void)
+{
+	my_main ();
+	return 0;
+}
+

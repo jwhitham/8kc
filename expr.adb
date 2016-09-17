@@ -15,17 +15,19 @@ procedure expr is
 						op_idiv, op_div, op_land, op_lxor, op_lor, op_lnot, op_bnot);
 	type t_token_kind is (eopen, eclose, sopen, sclose, error, number, alu_op, print, wloop,
 						semicolon, eot, symbol, set, var, defining_symbol,
-						ifcond, elsifcond, elsecond);
+						ifcond, elsifcond, elsecond, func);
 	type t_instruction_kind is (push, unary_op, binary_op, load, store, print,
-						branch_if_zero, branch_always, label, pop);
+						branch_if_zero, branch_always, label, pop, func_begin, func_end);
 	type t_value is new Natural;
 	type t_symbol_id is new Natural;
 	type t_label_id is new Natural;
 	type t_current_offset is new Natural;
 
 	type t_symbol is record
-		symbol_id : t_symbol_id := 0;
-		offset    : t_current_offset := 0;
+		symbol_id 	: t_symbol_id := 0;
+		offset    	: t_current_offset := 0;
+		has_body	: Boolean := False;
+		name		: Unbounded_String;
 	end record;
 	type t_symbol_p is access t_symbol;
 
@@ -93,6 +95,11 @@ procedure expr is
 			when pop =>
 				p ("pop eax");
 				current_offset := current_offset - 1;
+			when func_begin =>
+				p ("global " & arg);
+				p (arg & ":");
+			when func_end =>
+				p ("ret");
 		end case;
 	end gen_instruction;
 
@@ -344,12 +351,15 @@ procedure expr is
 						return (kind => print);
 					elsif To_String (text) = "while" then
 						return (kind => wloop);
+					elsif To_String (text) = "func" then
+						return (kind => func);
 					else
 						-- symbol not previously seen
 						declare
 							sym : constant t_symbol_p := new t_symbol;
 						begin
 							sym.symbol_id := t_symbol_id (symbols.Length);
+							sym.name := text;
 							symbols.Insert (text, sym);
 							return (kind => defining_symbol, sym => sym);
 						end;
@@ -410,7 +420,7 @@ procedure expr is
 			when eclose | sclose | eot | semicolon =>
 				rc := False;
 			when number | eopen | sopen | error | var | set | symbol | defining_symbol | print | wloop
-					| ifcond .. elsecond =>
+					| ifcond .. elsecond | func =>
 				raise user_error with "expected an operator, got a " & t.kind'Img;
 		end case;
 		p ("; -expect_operator " & t.kind'Img);
@@ -433,7 +443,7 @@ procedure expr is
 			when alu_op =>
 				rc := expect_expr;
 				gen_instruction (kind => t.op, binary => False); -- unary op
-			when set | var | print | wloop | sopen | ifcond .. elsecond =>
+			when set | var | print | wloop | sopen | ifcond .. elsecond | func =>
 				raise user_error with "expected an expression, got a " & t.kind'Img;
 			when defining_symbol =>
 				raise user_error with "symbol is undefined";
@@ -536,7 +546,8 @@ procedure expr is
 					p ("; -expect_stmt " & stmt.kind'Img);
 					return False;
 				end if;
-			when alu_op | defining_symbol | symbol | number | elsifcond | elsecond | eopen | eclose =>
+			when alu_op | defining_symbol | symbol | number | elsifcond | elsecond
+					| eopen | eclose | func =>
 				raise user_error with "expected a statement, got a " & stmt.kind'Img;
 			when sopen =>
 				-- look for var declarations
@@ -582,13 +593,59 @@ procedure expr is
 		return True;
 	end expect_stmt;
 
+	function expect_global (glob : t_token) return Boolean is
+		rc : Boolean := True;
+		pop_count : Natural := 0;
+	begin
+		p ("; +expect_global " & glob.kind'Img);
+		case glob.kind is
+			when var =>
+				raise user_error with "global variables not supported yet";
+			when func =>
+				declare
+					def : constant t_token := lex;
+					follow : constant t_token := lex;
+				begin
+					case def.kind is
+						when defining_symbol | symbol =>
+							-- function body already defined?
+							case follow.kind is
+								when sopen =>
+									if def.sym.has_body then
+										raise user_error with "function body already defined";
+									end if;
+									def.sym.has_body := True;
+									gen_instruction (func_begin, To_String (def.sym.name));
+									rc := expect_stmt (follow);
+									gen_instruction (func_end, To_String (def.sym.name));
+								when semicolon =>
+									null;
+								when others =>
+									raise user_error with "expected function body or ;";
+							end case;
+						when others =>
+							raise user_error with "expected function name";
+					end case;
+				end;
+			when print | set | wloop | ifcond
+					| alu_op | defining_symbol | symbol | number
+					| elsifcond | elsecond | eopen | eclose
+					| sopen | sclose | semicolon =>
+				raise user_error with "expected a global, got a " & glob.kind'Img;
+			when eot =>
+				raise end_program;
+			when error =>
+				raise user_error;
+		end case;
+		p ("; -expect_global " & glob.kind'Img);
+		return True;
+	end expect_global;
 begin
 	p ("extern quit");
 	p ("extern print");
-	p ("global main");
-	p ("main:");
+	p ("section .text");
 	begin
-		while expect_stmt (lex) loop
+		while expect_global (lex) loop
 			null;
 		end loop;
 	exception
@@ -598,14 +655,7 @@ begin
 	if current_offset /= 0 then
 		raise user_error with "stack pointer does not end at 0, it is" & current_offset'Img;
 	end if;
-	declare
-		size : constant Natural := Natural (symbols.Length) * 4;
-	begin
-		p ("jmp quit");
-		p ("section .data");
-		p ("base:");
-		p ("times" & size'Img & " db 0");
-	end;
+	p ("jmp quit");
 exception
 	when e : user_error =>
 		Ada.Text_IO.Put_Line

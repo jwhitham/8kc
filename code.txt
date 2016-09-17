@@ -1,4 +1,7 @@
 
+func pretending;
+
+func my_main
 {
 	var vname1;
 	var vname2;
@@ -77,3 +80,10 @@
 		if (vname2 == 70) print 1200; else print 1300;
 	}
 }
+
+func pretending
+{
+	print 1;
+}
+
+
