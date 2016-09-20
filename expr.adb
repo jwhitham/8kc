@@ -1,198 +1,18 @@
 with Ada.Text_IO;
 with Ada.Characters.Latin_1;
 with Ada.Strings.Unbounded; use Ada.Strings.Unbounded;
-with Ada.Strings.Unbounded.Hash;
-with Ada.Containers.Hashed_Maps;
 with Ada.Exceptions;
+
+with types; use types;
+with backend;
 
 procedure expr is
 	char 		: Character := ' ';
 	text 		: Unbounded_String;
 	undo_char 	: Character := Ada.Characters.Latin_1.NUL;
 
-	type t_alu_op_kind is (op_add, op_sub, op_bor, op_band, op_bxor, op_sll, op_srl,
-						op_sra, op_lt, op_le, op_gt, op_ge, op_eq, op_ne, op_mul,
-						op_idiv, op_div, op_land, op_lxor, op_lor, op_lnot, op_bnot);
-	type t_token_kind is (eopen, eclose, sopen, sclose, error, number, alu_op, print, wloop,
-						semicolon, eot, symbol, set, var, defining_symbol,
-						ifcond, elsifcond, elsecond, func);
-	type t_instruction_kind is (push, unary_op, binary_op, load, store, print,
-						branch_if_zero, branch_always, label, pop, func_begin, func_end);
-	type t_value is new Natural;
-	type t_symbol_id is new Natural;
-	type t_label_id is new Natural;
-	type t_current_offset is new Natural;
-
-	type t_symbol is record
-		symbol_id 	: t_symbol_id := 0;
-		offset    	: t_current_offset := 0;
-		has_body	: Boolean := False;
-		name		: Unbounded_String;
-	end record;
-	type t_symbol_p is access t_symbol;
-
-	package p_symbols is new Ada.Containers.Hashed_Maps
-		(Unbounded_String, t_symbol_p, Ada.Strings.Unbounded.Hash, "=", "=");
-
-	user_error	: exception;
 	end_program	: exception;
-	symbols		: p_symbols.Map;
-	num_labels	: t_label_id := 0;
-	current_offset : t_current_offset := 0;
-
-	type t_token (kind : t_token_kind) is record
-		case kind is
-			when number =>
-				value		: t_value := 0;
-			when symbol | defining_symbol =>
-				sym      	: t_symbol_p := null;
-			when alu_op =>
-				op			: t_alu_op_kind := op_add;
-			when others =>
-				null;
-		end case;
-	end record;
-
-	function new_label return t_label_id is
-		l : constant t_label_id := num_labels;
-	begin
-		num_labels := num_labels + 1;
-		return l;
-	end new_label;
-
-	procedure p (s : String) renames Ada.Text_IO.Put_Line;
-
-	procedure gen_instruction (kind : t_instruction_kind; arg : String := "") is
-	begin
-		case kind is
-			when push =>
-				p ("push " & arg);
-				current_offset := current_offset + 1;
-			when unary_op | binary_op =>
-				pragma Assert (False);
-				null;
-			when load =>
-				p ("mov eax,[esp + (4 *" & arg & ")]");
-				p ("push eax");
-				current_offset := current_offset + 1;
-			when store =>
-				p ("pop eax");
-				p ("mov [esp + (4 * (" & arg & " - 1))], eax");
-				current_offset := current_offset - 1;
-			when print =>
-				p ("call print");
-				p ("pop eax");
-				current_offset := current_offset - 1;
-			when branch_if_zero =>
-				p ("pop eax");
-				p ("cmp eax, 0");
-				p ("je " & arg);
-				current_offset := current_offset - 1;
-			when branch_always =>
-				p ("jmp " & arg);
-			when label =>
-				p (arg & ":");
-			when pop =>
-				p ("pop eax");
-				current_offset := current_offset - 1;
-			when func_begin =>
-				p ("global " & arg);
-				p (arg & ":");
-			when func_end =>
-				p ("ret");
-		end case;
-	end gen_instruction;
-
-	procedure gen_instruction (kind : t_instruction_kind; label_id : t_label_id) is
-		a : String := label_id'Img;
-	begin
-		a (a'First) := '_';
-		gen_instruction (kind => kind, arg => "L" & a);
-	end gen_instruction;
-
-	procedure gen_instruction (kind : t_alu_op_kind; binary : Boolean) is
-		procedure sign_fill (r : String := "eax") is
-		begin
-			p ("sar " & r & ", 31"); -- fill with sign bit
-		end sign_fill;
-		procedure eq (neq : Boolean) is
-			label_id : constant t_label_id := new_label;
-			text 	 : String := label_id'Img;
-		begin
-			text (text'First) := '_';
-			p ("xor eax, ebx"); -- zero if equal
-			if neq then
-				p ("mov eax, -1");
-			else
-				p ("mov eax, 0");
-			end if;
-			p ("jnz B" & text);
-			p ("not eax");
-			p ("B" & text & ":");
-		end eq;
-	begin
-		if not binary then
-			p ("pop eax");
-			case kind is
-				when op_add =>
-					null;
-				when op_sub =>
-					p ("neg eax");
-				when op_lnot =>
-					p ("not eax");
-				when op_bnot =>
-					p ("not eax");
-				when others =>
-					raise user_error with kind'Img & " is not a unary operation";
-			end case;
-			p ("push eax");
-			return;
-		end if;
-
-		current_offset := current_offset - 1;
-		p ("pop ebx");
-		p ("pop eax");
-		case kind is
-			when op_add =>	p ("add eax, ebx");
-			when op_sub =>	p ("sub eax, ebx");
-			when op_sll =>	p ("sll eax, ebx");
-			when op_srl =>	p ("srl eax, ebx");
-			when op_sra =>	p ("sra eax, ebx");
-			when op_mul =>	p ("imul eax, ebx");
-			when op_div =>	p ("div eax, ebx");
-			when op_idiv =>	p ("idiv eax, ebx");
-			when op_lor =>	p ("or eax, ebx");
-			when op_land =>	p ("and eax, ebx");
-			when op_lxor =>	p ("xor eax, ebx");
-			when op_bor =>	p ("or eax, ebx"); sign_fill;
-			when op_band =>	p ("and eax, ebx"); sign_fill;
-			when op_bxor =>	p ("xor eax, ebx"); sign_fill;
-			when op_lt =>	p ("sub eax, ebx"); sign_fill;
-			when op_gt =>	p ("sub ebx, eax"); sign_fill ("ebx"); p ("push ebx"); return;
-			when op_ge =>	p ("sub eax, ebx"); p ("not eax"); sign_fill;
-			when op_le =>	p ("sub ebx, eax"); p ("not ebx"); sign_fill ("ebx"); p ("push ebx"); return;
-			when op_eq =>	eq (False);
-			when op_ne =>	eq (True);
-			when others =>
-				raise user_error with kind'Img & " is not a binary operation";
-		end case;
-		p ("push eax");
-	end gen_instruction;
-
-	procedure gen_instruction (kind : t_instruction_kind; value : t_value) is
-	begin
-		gen_instruction (kind => kind, arg => value'Img);
-	end gen_instruction;
-
-	procedure gen_instruction (kind : t_instruction_kind; sym : t_symbol_p) is
-	begin
-		p ("; variable is at offset" & sym.offset'Img);
-		p ("; current offset is" & current_offset'Img);
-		if current_offset < sym.offset then
-			raise user_error with "symbol is out of scope";
-		end if;
-		gen_instruction (kind => kind, value => t_value (current_offset - sym.offset));
-	end gen_instruction;
+	symbols		: types.p_symbols.Map;
 
 	procedure update_char is
 	begin
@@ -393,7 +213,8 @@ procedure expr is
 	function lex return t_token is
 		t : constant t_token := lex2;
 	begin
-		p ("; " & t.kind'Img
+		backend.comment
+		   ("; " & t.kind'Img
 			& " at line" & Ada.Text_IO.Count'Image (Ada.Text_IO.Line (Ada.Text_IO.Standard_Input))
 			& " column" & Ada.Text_IO.Count'Image (Ada.Text_IO.Col (Ada.Text_IO.Standard_Input)));
 		return t;
@@ -412,18 +233,18 @@ procedure expr is
 		t : constant t_token := lex;
 		rc : Boolean := True;
 	begin
-		p ("; +expect_operator " & t.kind'Img);
+		backend.comment ("; +expect_operator " & t.kind'Img);
 		case t.kind is
 			when alu_op =>
 				rc := expect_expr;
-				gen_instruction (kind => t.op, binary => True);
+				backend.gen_instruction (kind => t.op, binary => True);
 			when eclose | sclose | eot | semicolon =>
 				rc := False;
 			when number | eopen | sopen | error | var | set | symbol | defining_symbol | print | wloop
 					| ifcond .. elsecond | func =>
 				raise user_error with "expected an operator, got a " & t.kind'Img;
 		end case;
-		p ("; -expect_operator " & t.kind'Img);
+		backend.comment ("; -expect_operator " & t.kind'Img);
 		return rc;
 	end expect_operator;
 
@@ -431,10 +252,10 @@ procedure expr is
 		t : constant t_token := lex;
 		rc : Boolean := True;
 	begin
-		p ("; +expect_expr " & t.kind'Img);
+		backend.comment ("; +expect_expr " & t.kind'Img);
 		case t.kind is
 			when number =>
-				gen_instruction (push, t.value);
+				backend.gen_instruction (push, t.value);
 				rc := expect_operator;
 			when eopen =>
 				while expect_expr and then expect_operator loop
@@ -442,32 +263,32 @@ procedure expr is
 				end loop;
 			when alu_op =>
 				rc := expect_expr;
-				gen_instruction (kind => t.op, binary => False); -- unary op
+				backend.gen_instruction (kind => t.op, binary => False); -- unary op
 			when set | var | print | wloop | sopen | ifcond .. elsecond | func =>
 				raise user_error with "expected an expression, got a " & t.kind'Img;
 			when defining_symbol =>
 				raise user_error with "symbol is undefined";
 			when symbol =>
-				gen_instruction (load, t.sym);
+				backend.gen_instruction (load, t.sym);
 				rc := expect_operator;
 			when eot | semicolon | eclose | sclose =>
 				rc := False;
 			when error =>
 				raise user_error;
 		end case;
-		p ("; -expect_expr " & t.kind'Img);
+		backend.comment ("; -expect_expr " & t.kind'Img);
 		return rc;
 	end expect_expr;
 
 	function expect_stmt (stmt : t_token) return Boolean;
 
 	function expect_ifcond return Boolean is
-		footer 	: constant t_label_id := new_label;
-		next	: t_label_id := new_label;
+		footer 	: constant t_label_id := backend.new_label;
+		next	: t_label_id := backend.new_label;
 		rc 		: Boolean := True;
 	begin
 		rc := expect_expr;
-		gen_instruction (branch_if_zero, next);
+		backend.gen_instruction (branch_if_zero, next);
 		if not expect_stmt (lex) then
 			raise user_error with "cannot end if block here";
 		end if;
@@ -478,29 +299,29 @@ procedure expr is
 				case stmt2.kind is
 					when elsifcond =>
 						-- end previous if block
-						gen_instruction (branch_always, footer);
+						backend.gen_instruction (branch_always, footer);
 						-- new test begins
-						gen_instruction (label, next);
-						next := new_label;
+						backend.gen_instruction (label, next);
+						next := backend.new_label;
 						rc := expect_expr;
-						gen_instruction (branch_if_zero, next);
+						backend.gen_instruction (branch_if_zero, next);
 						-- new if block
 						if not expect_stmt (lex) then
 							raise user_error with "cannot end elsif block here";
 						end if;
 					when elsecond =>
 						-- end previous if block
-						gen_instruction (branch_always, footer);
+						backend.gen_instruction (branch_always, footer);
 						-- final if block
-						gen_instruction (label, next);
-						next := new_label;
+						backend.gen_instruction (label, next);
+						next := backend.new_label;
 						if not expect_stmt (lex) then
 							raise user_error with "cannot end else block here";
 						end if;
 					when others =>
 						-- end final if block
-						gen_instruction (label, next);
-						gen_instruction (label, footer);
+						backend.gen_instruction (label, next);
+						backend.gen_instruction (label, footer);
 						-- do whatever is next
 						return expect_stmt (stmt2);
 				end case;
@@ -512,38 +333,38 @@ procedure expr is
 		rc : Boolean := True;
 		pop_count : Natural := 0;
 	begin
-		p ("; +expect_stmt " & stmt.kind'Img);
+		backend.comment ("; +expect_stmt " & stmt.kind'Img);
 		case stmt.kind is
 			when var =>
 				raise user_error with "var only allowed at the beginning of the block";
 			when print =>
 				rc := expect_expr;
-				gen_instruction (print);
+				backend.gen_instruction (print);
 			when set =>
 				declare
 					left : constant t_token := lex;
 				begin
 					expect (left, symbol);
 					rc := expect_expr;
-					gen_instruction (store, left.sym);
+					backend.gen_instruction (store, left.sym);
 				end;
 			when wloop =>
 				declare
-					header : constant t_label_id := new_label;
-					footer : constant t_label_id := new_label;
+					header : constant t_label_id := backend.new_label;
+					footer : constant t_label_id := backend.new_label;
 				begin
-					gen_instruction (label, header);
+					backend.gen_instruction (label, header);
 					rc := expect_expr;
-					gen_instruction (branch_if_zero, footer);
+					backend.gen_instruction (branch_if_zero, footer);
 					if not expect_stmt (lex) then
 						raise user_error with "cannot end while block here";
 					end if;
-					gen_instruction (branch_always, header);
-					gen_instruction (label, footer);
+					backend.gen_instruction (branch_always, header);
+					backend.gen_instruction (label, footer);
 				end;
 			when ifcond =>
 				if not expect_ifcond then
-					p ("; -expect_stmt " & stmt.kind'Img);
+					backend.comment ("; -expect_stmt " & stmt.kind'Img);
 					return False;
 				end if;
 			when alu_op | defining_symbol | symbol | number | elsifcond | elsecond
@@ -562,8 +383,8 @@ procedure expr is
 							begin
 								expect (def, defining_symbol);
 								expect (lex, semicolon);
-								gen_instruction (push, init);
-								def.sym.offset := current_offset;
+								backend.gen_instruction (push, init);
+								def.sym.offset := backend.get_current_offset;
 								pop_count := pop_count + 1;
 							end;
 						else
@@ -576,11 +397,11 @@ procedure expr is
 					rc := expect_stmt (lex);
 				end loop;
 				while pop_count /= 0 loop
-					gen_instruction (pop);
+					backend.gen_instruction (pop);
 					pop_count := pop_count - 1;
 				end loop;
 			when sclose =>
-				p ("; -expect_stmt " & stmt.kind'Img);
+				backend.comment ("; -expect_stmt " & stmt.kind'Img);
 				return False;
 			when semicolon =>
 				null;
@@ -589,7 +410,7 @@ procedure expr is
 			when error =>
 				raise user_error;
 		end case;
-		p ("; -expect_stmt " & stmt.kind'Img);
+		backend.comment ("; -expect_stmt " & stmt.kind'Img);
 		return True;
 	end expect_stmt;
 
@@ -597,7 +418,7 @@ procedure expr is
 		rc : Boolean := True;
 		pop_count : Natural := 0;
 	begin
-		p ("; +expect_global " & glob.kind'Img);
+		backend.comment ("; +expect_global " & glob.kind'Img);
 		case glob.kind is
 			when var =>
 				raise user_error with "global variables not supported yet";
@@ -615,9 +436,9 @@ procedure expr is
 										raise user_error with "function body already defined";
 									end if;
 									def.sym.has_body := True;
-									gen_instruction (func_begin, To_String (def.sym.name));
+									backend.gen_instruction (func_begin, To_String (def.sym.name));
 									rc := expect_stmt (follow);
-									gen_instruction (func_end, To_String (def.sym.name));
+									backend.gen_instruction (func_end, To_String (def.sym.name));
 								when semicolon =>
 									null;
 								when others =>
@@ -637,13 +458,11 @@ procedure expr is
 			when error =>
 				raise user_error;
 		end case;
-		p ("; -expect_global " & glob.kind'Img);
+		backend.comment ("; -expect_global " & glob.kind'Img);
 		return True;
 	end expect_global;
 begin
-	p ("extern quit");
-	p ("extern print");
-	p ("section .text");
+	backend.init;
 	begin
 		while expect_global (lex) loop
 			null;
@@ -652,10 +471,7 @@ begin
 		when end_program =>
 			null;
 	end;
-	if current_offset /= 0 then
-		raise user_error with "stack pointer does not end at 0, it is" & current_offset'Img;
-	end if;
-	p ("jmp quit");
+	backend.fini;
 exception
 	when e : user_error =>
 		Ada.Text_IO.Put_Line
