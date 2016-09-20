@@ -1,9 +1,9 @@
 
-expr: expr.adb Makefile
-	gnatmake -g -O0 -gnata -gnat12 expr.adb
+main: main.adb Makefile
+	gnatmake -g -O0 -gnata -gnat12 main.adb
 
-test: expr code.txt support.o Makefile
-	./expr < code.txt > a.s
+test: main code.txt support.o Makefile
+	./main < code.txt > a.s
 	nasm -f elf32 a.s
 	gcc -o a.exe a.o support.o -m32
 	./a.exe > a.txt
@@ -13,4 +13,4 @@ support.o: support.c Makefile
 	gcc -c support.c -O2 -m32
 
 clean:
-	rm -f expr
+	rm -f main *.ali *.o a.txt a.exe

@@ -43,6 +43,7 @@ package types is
 		(Unbounded_String, t_symbol_p, Ada.Strings.Unbounded.Hash, "=", "=");
 
 	user_error	: exception;
+	end_program	: exception;
 
 end types;
 
