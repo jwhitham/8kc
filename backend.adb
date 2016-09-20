@@ -5,6 +5,7 @@ package body backend is
 
 	num_labels		: t_label_id := 0;
 	current_offset 	: t_current_offset := 0;
+	bytes_per_word	: constant Natural := 8;
 
 	function new_label return t_label_id is
 		l : constant t_label_id := num_labels;
@@ -26,20 +27,20 @@ package body backend is
 				pragma Assert (False);
 				null;
 			when load =>
-				p ("mov eax,[esp + (4 *" & arg & ")]");
-				p ("push eax");
+				p ("mov rax,[rsp + (" & bytes_per_word'Img & " *" & arg & ")]");
+				p ("push rax");
 				current_offset := current_offset + 1;
 			when store =>
-				p ("pop eax");
-				p ("mov [esp + (4 * (" & arg & " - 1))], eax");
+				p ("pop rax");
+				p ("mov [rsp + (" & bytes_per_word'Img & " * (" & arg & " - 1))], rax");
 				current_offset := current_offset - 1;
 			when print =>
+				p ("pop rdi"); -- arg 1 (https://en.wikipedia.org/wiki/X86_calling_conventions)
 				p ("call print");
-				p ("pop eax");
 				current_offset := current_offset - 1;
 			when branch_if_zero =>
-				p ("pop eax");
-				p ("cmp eax, 0");
+				p ("pop rax");
+				p ("cmp rax, 0");
 				p ("je " & arg);
 				current_offset := current_offset - 1;
 			when branch_always =>
@@ -47,7 +48,7 @@ package body backend is
 			when label =>
 				p (arg & ":");
 			when pop =>
-				p ("pop eax");
+				p ("pop rax");
 				current_offset := current_offset - 1;
 			when func_begin =>
 				p ("global " & arg);
@@ -65,72 +66,73 @@ package body backend is
 	end gen_instruction;
 
 	procedure gen_instruction (kind : t_alu_op_kind; binary : Boolean) is
-		procedure sign_fill (r : String := "eax") is
+		procedure sign_fill (r : String := "rax") is
+			shift_size : constant Natural := (bytes_per_word * 8) - 1;
 		begin
-			p ("sar " & r & ", 31"); -- fill with sign bit
+			p ("sar " & r & ", " & shift_size'Img); -- fill with sign bit
 		end sign_fill;
 		procedure eq (neq : Boolean) is
 			label_id : constant t_label_id := new_label;
 			text 	 : String := label_id'Img;
 		begin
 			text (text'First) := '_';
-			p ("xor eax, ebx"); -- zero if equal
+			p ("xor rax, rbx"); -- zero if equal
 			if neq then
-				p ("mov eax, -1");
+				p ("mov rax, -1");
 			else
-				p ("mov eax, 0");
+				p ("mov rax, 0");
 			end if;
 			p ("jnz B" & text);
-			p ("not eax");
+			p ("not rax");
 			p ("B" & text & ":");
 		end eq;
 	begin
 		if not binary then
-			p ("pop eax");
+			p ("pop rax");
 			case kind is
 				when op_add =>
 					null;
 				when op_sub =>
-					p ("neg eax");
+					p ("neg rax");
 				when op_lnot =>
-					p ("not eax");
+					p ("not rax");
 				when op_bnot =>
-					p ("not eax");
+					p ("not rax");
 				when others =>
 					raise user_error with kind'Img & " is not a unary operation";
 			end case;
-			p ("push eax");
+			p ("push rax");
 			return;
 		end if;
 
 		current_offset := current_offset - 1;
-		p ("pop ebx");
-		p ("pop eax");
+		p ("pop rbx");
+		p ("pop rax");
 		case kind is
-			when op_add =>	p ("add eax, ebx");
-			when op_sub =>	p ("sub eax, ebx");
-			when op_sll =>	p ("sll eax, ebx");
-			when op_srl =>	p ("srl eax, ebx");
-			when op_sra =>	p ("sra eax, ebx");
-			when op_mul =>	p ("imul eax, ebx");
-			when op_div =>	p ("div eax, ebx");
-			when op_idiv =>	p ("idiv eax, ebx");
-			when op_lor =>	p ("or eax, ebx");
-			when op_land =>	p ("and eax, ebx");
-			when op_lxor =>	p ("xor eax, ebx");
-			when op_bor =>	p ("or eax, ebx"); sign_fill;
-			when op_band =>	p ("and eax, ebx"); sign_fill;
-			when op_bxor =>	p ("xor eax, ebx"); sign_fill;
-			when op_lt =>	p ("sub eax, ebx"); sign_fill;
-			when op_gt =>	p ("sub ebx, eax"); sign_fill ("ebx"); p ("push ebx"); return;
-			when op_ge =>	p ("sub eax, ebx"); p ("not eax"); sign_fill;
-			when op_le =>	p ("sub ebx, eax"); p ("not ebx"); sign_fill ("ebx"); p ("push ebx"); return;
+			when op_add =>	p ("add rax, rbx");
+			when op_sub =>	p ("sub rax, rbx");
+			when op_sll =>	p ("sll rax, rbx");
+			when op_srl =>	p ("srl rax, rbx");
+			when op_sra =>	p ("sra rax, rbx");
+			when op_mul =>	p ("imul rax, rbx");
+			when op_div =>	p ("div rax, rbx");
+			when op_idiv =>	p ("idiv rax, rbx");
+			when op_lor =>	p ("or rax, rbx");
+			when op_land =>	p ("and rax, rbx");
+			when op_lxor =>	p ("xor rax, rbx");
+			when op_bor =>	p ("or rax, rbx"); sign_fill;
+			when op_band =>	p ("and rax, rbx"); sign_fill;
+			when op_bxor =>	p ("xor rax, rbx"); sign_fill;
+			when op_lt =>	p ("sub rax, rbx"); sign_fill;
+			when op_gt =>	p ("sub rbx, rax"); sign_fill ("rbx"); p ("push rbx"); return;
+			when op_ge =>	p ("sub rax, rbx"); p ("not rax"); sign_fill;
+			when op_le =>	p ("sub rbx, rax"); p ("not rbx"); sign_fill ("rbx"); p ("push rbx"); return;
 			when op_eq =>	eq (False);
 			when op_ne =>	eq (True);
 			when others =>
 				raise user_error with kind'Img & " is not a binary operation";
 		end case;
-		p ("push eax");
+		p ("push rax");
 	end gen_instruction;
 
 	procedure gen_instruction (kind : t_instruction_kind; value : t_value) is

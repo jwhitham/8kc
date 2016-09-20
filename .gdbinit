@@ -1,0 +1,2 @@
+display /i $pc
+start
